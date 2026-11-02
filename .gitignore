@@ -1,0 +1,7 @@
+# 카드 원본 데이터가 실수로 올라가지 않도록 차단
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.txt
+!_headers

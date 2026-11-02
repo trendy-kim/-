@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="referrer" content="no-referrer">
+<!-- 데이터 외부 전송 차단: 연결 가능한 곳을 자기 서버와 카카오로 제한 -->
+<meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' https://generativelanguage.googleapis.com https://*.kakao.com https://*.daumcdn.net https://*.kakaocdn.net">
+<title>법인카드 집근처 분석</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">법인카드 <b>집근처 사용</b> 분석</div>
+  <nav class="tabs">
+    <button data-tab="dash" class="active">대시보드</button>
+    <button data-tab="data">① 데이터 업로드</button>
+    <button data-tab="homes">② 집주소 관리</button>
+    <button data-tab="ai">③ 이상징후·보고서</button>
+    <button data-tab="settings">설정</button>
+  </nav>
+  <span id="kakaoStatus" class="pill">카카오맵 확인 중</span>
+</header>
+
+<main>
+  <!-- 대시보드 -->
+  <section id="tab-dash" class="tab active">
+    <div class="filters card">
+      <label>이용자 <select id="fUser"><option value="">전체</option></select></label>
+      <label>기간 <input type="date" id="fFrom"> ~ <input type="date" id="fTo"></label>
+      <label>반경
+        <select id="fRadius">
+          <option value="300">300m</option><option value="500">500m</option><option value="1000">1km</option>
+          <option value="2000">2km</option><option value="3000">3km</option><option value="5000">5km</option>
+        </select>
+      </label>
+      <label>위험도
+        <select id="fLevel"><option value="0">전체</option><option value="60">주의 이상(60+)</option><option value="80">높음(80+)</option></select>
+      </label>
+      <label class="chk"><input type="checkbox" id="fOnlyNear"> 지도에 집근처만</label>
+      <input type="search" id="fSearch" placeholder="가맹점·업종·주소 검색">
+      <button id="btnExport" class="btn">집근처 내역 CSV</button>
+    </div>
+
+    <div id="banner" class="banner hidden"></div>
+    <div id="emptyDash" class="empty hidden">
+      아직 데이터가 없습니다. <a href="#" data-goto="data">① 데이터 업로드</a>에서 법인카드 내역(엑셀/CSV)을 올리거나 샘플 데이터를 불러오세요.
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="grid2">
+      <div class="card map-card">
+        <div id="map"><div class="map-ph" id="mapPh">설정에서 카카오 JavaScript 키를 입력하면 지도가 표시됩니다.</div></div>
+        <div class="legend">
+          <span><i class="lg home"></i>집</span>
+          <span><i class="lg circle"></i>반경</span>
+          <span><i class="lg near"></i>집근처 사용</span>
+          <span><i class="lg far"></i>기타 사용</span>
+          <span class="muted">숫자 = 같은 위치 거래 건수 · 점을 누르면 상세</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>이용자별 요약</h3>
+        <div id="userTable" class="scroll"></div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card"><h3>집근처 자주 이용한 가맹점</h3><div id="merchantTable" class="scroll"></div></div>
+      <div class="card"><h3>업종별 집근처 사용</h3><div id="catTable" class="scroll"></div></div>
+    </div>
+
+    <div class="card">
+      <h3>집근처 사용 상세 <span id="detailCount" class="muted"></span></h3>
+      <p class="hint">위험점수 = 집근처 40 + 거리가중(가까울수록 최대 20) + 주말·공휴일 25 + 심야 15. 행을 누르면 지도에서 위치를 보여줍니다.</p>
+      <div id="detailTable" class="scroll tall"></div>
+    </div>
+  </section>
+
+  <!-- 데이터 업로드 -->
+  <section id="tab-data" class="tab">
+    <div class="card">
+      <h3>법인카드 이용내역 업로드</h3>
+      <label id="drop" class="drop">
+        <input type="file" id="file" accept=".xlsx,.xls,.csv,.txt" hidden>
+        <b>엑셀(.xlsx/.xls) 또는 CSV 파일</b>을 끌어놓거나 클릭해서 선택하세요.<br>
+        <span class="muted">첫 행(또는 상단 30행 안)에 순번·카드번호·이용자명·이용일·가맹점명·이용금액·가맹점 주소 … 머리글이 있어야 합니다.</span>
+      </label>
+      <div class="row-btns">
+        <button id="btnSample" class="btn">샘플 데이터 불러오기</button>
+        <button id="btnTemplate" class="btn ghost">빈 양식(CSV) 내려받기</button>
+        <button id="btnClearData" class="btn ghost danger">불러온 데이터 지우기</button>
+      </div>
+      <div id="dataSummary"></div>
+    </div>
+
+    <div class="card">
+      <h3>가맹점 주소 → 좌표 변환 (카카오 로컬)</h3>
+      <p class="hint">가맹점 주소로 좌표를 찾고, 실패하면 정리한 주소·가맹점명 키워드로 다시 찾습니다. 결과는 이 브라우저에 저장되어 같은 주소는 다시 조회하지 않습니다.</p>
+      <div class="row-btns">
+        <button id="btnGeo" class="btn primary">좌표 변환 시작</button>
+        <button id="btnGeoRetry" class="btn ghost">실패한 주소 다시 시도</button>
+      </div>
+      <div class="progress hidden" id="geoProg"><div id="geoBar"></div></div>
+      <div id="geoStatus" class="muted"></div>
+      <div id="geoFails"></div>
+    </div>
+
+    <div class="card">
+      <h3>미리보기 (앞 15행)</h3>
+      <div id="preview" class="scroll"></div>
+    </div>
+  </section>
+
+  <!-- 집주소 -->
+  <section id="tab-homes" class="tab">
+    <div class="card">
+      <h3>이용자별 집주소</h3>
+      <p class="hint">데이터의 이용자명이 자동으로 나열됩니다. 주소를 입력하고 [검색]을 누르거나, [지도에서 선택]으로 직접 위치를 찍으세요. 집주소는 이 브라우저에만 저장됩니다. 카드 내역은 탭을 닫으면 사라지고(카드번호는 뒤 4자리만 보관), 집주소·좌표는 이 PC에 남으니 공용 PC에서는 사용 후 [설정 &gt; 모든 저장값 초기화]를 누르세요.</p>
+      <div id="homeTable" class="scroll"></div>
+    </div>
+    <div class="card">
+      <h3>일괄 등록</h3>
+      <p class="hint">한 줄에 <code>이용자명, 집주소</code> (쉼표 또는 탭 구분). 엑셀에서 두 열을 복사해 붙여넣어도 됩니다.</p>
+      <textarea id="bulkHomes" rows="6" placeholder="홍길동, 서울 중구 세종대로 110&#10;김철수	경기 성남시 분당구 판교역로 166"></textarea>
+      <div class="row-btns"><button id="btnBulk" class="btn primary">일괄 등록</button></div>
+      <div id="bulkStatus" class="muted"></div>
+    </div>
+  </section>
+
+  <!-- 이상징후·보고서 -->
+  <section id="tab-ai" class="tab">
+    <div class="card">
+      <h3>이상징후 탐지 결과 <span id="anoCount" class="muted"></span></h3>
+      <p class="hint">대시보드의 이용자·기간 필터가 그대로 적용됩니다. 규칙 기반 탐지이며 <b>부정 확정이 아니라 소명 확인 대상</b>입니다.</p>
+      <div id="anoEmpty" class="empty hidden"></div>
+      <div id="anoTable" class="scroll tall"></div>
+    </div>
+
+    <div class="card">
+      <h3>AI 요약 (Gemini)</h3>
+      <p class="hint">탐지 결과의 집계값만 Gemini로 전송합니다. 카드번호·집주소는 전송하지 않으며, 직원명은 가명(직원01…)으로 바꿔 보냅니다(설정에서 변경).</p>
+      <div class="row-btns">
+        <button id="btnAiSummary" class="btn primary">AI 요약 생성</button>
+        <span id="aiSumStatus" class="muted"></span>
+      </div>
+      <div id="aiSummary" class="md"></div>
+    </div>
+
+    <div class="card">
+      <h3>경영진 보고서 작성</h3>
+      <div class="form-grid">
+        <label class="field">보고서 제목 <input type="text" id="rTitle" value="법인카드 집근처 사용 이상징후 점검 보고"></label>
+        <label class="field">보고 대상 <input type="text" id="rTo" value="경영진"></label>
+        <label class="field">작성 부서 <input type="text" id="rDept" placeholder="예) 감사팀"></label>
+        <label class="field">작성자 <input type="text" id="rAuthor"></label>
+      </div>
+      <div class="row-btns">
+        <button id="btnReport" class="btn primary">보고서 생성 (AI 총평 포함)</button>
+        <button id="btnReportLocal" class="btn">AI 없이 기본 보고서</button>
+        <button id="btnPrint" class="btn ghost">인쇄 / PDF 저장</button>
+        <button id="btnCopy" class="btn ghost">텍스트 복사</button>
+        <button id="btnSaveHtml" class="btn ghost">HTML 저장</button>
+        <span id="rStatus" class="muted"></span>
+      </div>
+      <div id="reportOut" class="report"><p class="muted">[보고서 생성]을 누르면 이곳에 표시됩니다.</p></div>
+    </div>
+  </section>
+
+  <!-- 설정 -->
+  <section id="tab-settings" class="tab">
+    <div class="card">
+      <h3>카카오맵 연결</h3>
+      <label class="field">JavaScript 키 <input type="text" id="sKey" placeholder="카카오 개발자센터 > 내 애플리케이션 > 앱 키 > JavaScript 키"></label>
+      <ol class="guide">
+        <li><a href="https://developers.kakao.com/console/app" target="_blank" rel="noopener">카카오 개발자센터</a>에서 애플리케이션을 만듭니다.</li>
+        <li>[앱 설정 &gt; 플랫폼 &gt; Web]에 사이트 도메인 지금 접속 중인 주소 <code id="origin"></code> 를 등록합니다. (주소창에 보이는 것과 글자 그대로, 포트 포함)</li>
+        <li>[카카오맵] 사용 설정을 <b>ON</b>으로 켭니다. (꺼져 있으면 지도·주소검색이 동작하지 않습니다)</li>
+        <li>[앱 키]의 <b>JavaScript 키</b>를 위에 붙여넣고 저장합니다. 저장하면 페이지가 새로고침됩니다.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>Gemini 연결 (AI 요약·보고서)</h3>
+      <label class="field">Gemini API 키 <input type="password" id="sGemKey" autocomplete="off" placeholder="Google AI Studio에서 발급한 API 키"></label>
+      <div class="form-grid">
+        <label class="field">모델 <input type="text" id="sGemModel" list="gemModels" placeholder="gemini-3.8-flash"><datalist id="gemModels"></datalist></label>
+        <label class="field chk"><input type="checkbox" id="sPseudo"> 직원명을 가명(직원01…)으로 바꿔 전송 (권장)</label>
+      </div>
+      <div class="row-btns"><button id="btnGemTest" class="btn">연결 테스트</button> <span id="gemTestStatus" class="muted"></span></div>
+      <ol class="guide">
+        <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>에서 API 키를 발급받아 위 칸에 붙여넣고 아래 [저장]을 누릅니다.</li>
+        <li>키는 이 PC 브라우저에만 저장되며, Gemini 호출 외에는 사용되지 않습니다. 공용 PC에서는 사용 후 [모든 저장값 초기화]를 누르세요.</li>
+        <li><b>전송되는 정보</b>: 집계 통계, 이상징후 요약, 예시 거래(일자·시간·가맹점·업종·금액·거리). <b>전송 안 됨</b>: 카드번호, 집주소, 좌표, 전체 거래 원본.</li>
+        <li>회사 정책상 외부 AI로 가맹점·금액 정보를 보내면 안 되는 경우 사용하지 마세요. 키를 비워두면 AI 기능은 꺼지고 나머지는 그대로 동작합니다.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>분석 기준</h3>
+      <div class="form-grid">
+        <label class="field">집근처 반경
+          <select id="sRadius">
+            <option value="300">300m</option><option value="500">500m</option><option value="1000">1km</option>
+            <option value="2000">2km</option><option value="3000">3km</option><option value="5000">5km</option>
+          </select>
+        </label>
+        <label class="field">심야 시작(시) <input type="number" id="sNightStart" min="0" max="23"></label>
+        <label class="field">심야 종료(시) <input type="number" id="sNightEnd" min="0" max="23"></label>
+        <label class="field chk"><input type="checkbox" id="sExcludeCancel"> 취소 전표·음수 금액은 분석에서 제외</label>
+      </div>
+      <label class="field">추가 휴일 (회사 창립기념일 등, YYYY-MM-DD 한 줄에 하나)
+        <textarea id="sHolidays" rows="3" placeholder="2026-04-01"></textarea>
+      </label>
+      <p class="hint">2025·2026년 법정공휴일(대체공휴일·선거일 포함)은 기본 반영되어 있습니다.</p>
+      <div class="row-btns">
+        <button id="btnSaveSettings" class="btn primary">저장</button>
+        <button id="btnClearGeo" class="btn ghost">좌표 캐시 초기화</button>
+        <button id="btnClearAll" class="btn ghost danger">모든 저장값 초기화</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+<script src="ai.js"></script>
+</body>
+</html>
